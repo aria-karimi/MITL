@@ -328,7 +328,29 @@ bool operator==(const Real& a, const Real& b) {
         return a.isPositiveInfinity() == b.isPositiveInfinity() &&
                a.isNegativeInfinity() == b.isNegativeInfinity();
     }
-    return static_cast<double>(a) == static_cast<double>(b);
+    if (a.isZero() && b.isZero()) {
+        return true;
+    }
+
+    if (a.negative_ != b.negative_) {
+        return false;
+    }
+
+    // Compare exact values by aligning binary exponents and matching scaled magnitudes.
+    const std::int64_t commonExp = std::min(a.exponent_, b.exponent_);
+    BigInt aMag = Real::getBigIntMagnitude(a);
+    BigInt bMag = Real::getBigIntMagnitude(b);
+
+    const std::int64_t aShift = a.exponent_ - commonExp;
+    const std::int64_t bShift = b.exponent_ - commonExp;
+    if (aShift > 0) {
+        aMag.mulPow2(static_cast<std::uint64_t>(aShift));
+    }
+    if (bShift > 0) {
+        bMag.mulPow2(static_cast<std::uint64_t>(bShift));
+    }
+
+    return aMag == bMag;
 }
 
 bool operator!=(const Real& a, const Real& b) {

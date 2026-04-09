@@ -8,23 +8,6 @@
 
 namespace mitl {
 
-namespace {
-
-bool approxEqual(double a, double b) {
-    if (std::isnan(a) || std::isnan(b)) {
-        return false;
-    }
-    if (std::isinf(a) || std::isinf(b)) {
-        return a == b;
-    }
-
-    const double diff = std::fabs(a - b);
-    const double scale = std::max(1.0, std::max(std::fabs(a), std::fabs(b)));
-    return diff <= (1e-12 * scale);
-}
-
-} // namespace
-
 Complex::Complex()
     : real_(0.0), imag_(0.0) {}
 
@@ -192,8 +175,7 @@ Complex& Complex::operator/=(double scalar) {
 }
 
 bool operator==(const Complex& a, const Complex& b) {
-    return approxEqual(static_cast<double>(a.real_), static_cast<double>(b.real_)) &&
-           approxEqual(static_cast<double>(a.imag_), static_cast<double>(b.imag_));
+    return (a.real_ == b.real_) && (a.imag_ == b.imag_);
 }
 
 std::string Complex::toString() const {

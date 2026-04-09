@@ -205,10 +205,10 @@ public:
         return Complex(lhs, 0.0) / rhs;
     }
 
-    /** @brief Returns true when both parts are approximately equal (double-based tolerance). */
+    /** @brief Returns true when both parts are exactly equal by mitl::Real equality. */
     friend bool operator==(const Complex& a, const Complex& b);
 
-    /** @brief Returns true when values are not approximately equal. */
+    /** @brief Returns true when values are not exactly equal. */
     friend bool operator!=(const Complex& a, const Complex& b) {
         return !(a == b);
     }

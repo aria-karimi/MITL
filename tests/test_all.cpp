@@ -632,6 +632,12 @@ TEST(real_comparison_nan_ieee) {
     ASSERT_EQ(nan >= x, false);
 }
 
+TEST(real_equality_exact_no_double_collapse) {
+    mitl::Real a(1e308);
+    mitl::Real b = a + mitl::Real(1.0);
+    ASSERT_EQ(a == b, false);
+}
+
 TEST(real_subtract_from_zero) {
     mitl::Real a(0.0);
     mitl::Real b(5.0);
@@ -770,6 +776,13 @@ TEST(complex_parse_invalid_throws) {
     ASSERT_THROW(mitl::Complex::parse("(3,4)"), std::invalid_argument);
 }
 
+TEST(complex_equality_exact_no_double_collapse) {
+    const mitl::Real huge(1e308);
+    const mitl::Complex a(huge, mitl::Real(0.0));
+    const mitl::Complex b(huge + mitl::Real(1.0), mitl::Real(0.0));
+    ASSERT_EQ(a == b, false);
+}
+
 // =============================================================================
 // Main
 // =============================================================================
@@ -861,6 +874,7 @@ int main() {
     RUN(real_is_integer_public_query);
     RUN(real_comparison_operators);
     RUN(real_comparison_nan_ieee);
+    RUN(real_equality_exact_no_double_collapse);
     RUN(real_subtract_from_zero);
     RUN(real_division_throws_zero);
     RUN(real_zero_int64_conversion);
@@ -882,6 +896,7 @@ int main() {
     RUN(complex_scalar_overloads_real_double);
     RUN(complex_parse_valid);
     RUN(complex_parse_invalid_throws);
+    RUN(complex_equality_exact_no_double_collapse);
 
     std::cout << "\n========================================\n";
     std::cout << "Results: " << g_passes << " passed, " << g_fails << " failed\n";
