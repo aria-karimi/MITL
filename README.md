@@ -33,7 +33,6 @@ MITL exposes C++ and Python APIs with the same core behavior for integer, real, 
 - `Real` `%` uses integer-style remainder over integer-converted operands.
 - `Complex::toString()` emits canonical `a+bi` or `a-bi` text.
 - `Complex::parse()` accepts `a+bi` / `a-bi` with optional whitespace and scientific notation.
-- `Complex` equality is approximate (double-based tolerance), not exact symbolic equality.
 
 ## Requirements
 
