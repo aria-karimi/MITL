@@ -1,6 +1,7 @@
 #include "mitl/BigInt.hpp"
 
 #include <algorithm>
+#include <stdexcept>
 #include <ostream>
 
 namespace mitl {
@@ -33,32 +34,63 @@ BigInt::BigInt(std::int64_t value)
 BigInt::BigInt(const std::string& decimal)
 {
 	if (decimal.empty()) {
-		return;
+		throw std::invalid_argument("BigInt: empty input");
 	}
 
 	std::size_t pos = 0;
-	if (decimal[pos] == '+') {
-		++pos;
-	} else if (decimal[pos] == '-') {
-		sign_ = true;
-		++pos;
+	if (decimal[pos] == '+') ++pos;
+	else if (decimal[pos] == '-') { sign_ = true; ++pos; }
+
+	if (pos >= decimal.size()) {
+		throw std::invalid_argument("BigInt: sign without digits");
 	}
 
+	if (decimal[pos] < '0' || decimal[pos] > '9') {
+		throw std::invalid_argument("BigInt: invalid first digit");
+	}
+
+	bool isNeg = sign_;  // save before any operations
+
+	// Process decimal digits left-to-right: result = result * 10 + digit
 	for (; pos < decimal.size(); ++pos) {
 		char c = decimal[pos];
 		if (c < '0' || c > '9') {
-			break;
+			throw std::invalid_argument("BigInt: invalid character in input");
 		}
-		std::uint32_t digit = static_cast<std::uint32_t>(c - '0');
-		mulSmall(10u);
+		std::uint32_t d = static_cast<std::uint32_t>(c - '0');
+
 		if (isZero()) {
-			limbs_.push_back(digit);
-		} else {
-			limbs_[0] += digit;
+			if (d != 0) limbs_.push_back(d);
+			continue;
 		}
-		normalize();
+
+		// Multiply by 10, preserving sign
+		sign_ = isNeg;
+		mulSmall(10u);
+		sign_ = isNeg;
+
+		// Add d to lowest limb with carry
+		std::uint64_t sum = static_cast<std::uint64_t>(limbs_[0]) + d;
+		if (sum >= BASE) {
+			limbs_[0] = static_cast<std::uint32_t>(sum - BASE);
+			std::size_t i = 1;
+			while (i < limbs_.size()) {
+				if (limbs_[i] < BASE - 1) {
+					limbs_[i]++;
+					break;
+				}
+				limbs_[i] = 0;
+				++i;
+			}
+			if (i >= limbs_.size()) limbs_.push_back(1);
+		} else {
+			limbs_[0] = static_cast<std::uint32_t>(sum);
+		}
 	}
+
 	normalize();
+	if (isZero()) sign_ = false;
+	else sign_ = isNeg;
 }
 
 BigInt BigInt::zero()
@@ -205,6 +237,10 @@ BigInt& BigInt::mulSmall(std::uint32_t k)
 
 std::uint32_t BigInt::divSmall(std::uint32_t k)
 {
+	if (k == 0) {
+		throw std::domain_error("BigInt::divSmall division by zero");
+	}
+
 	std::uint64_t rem = 0;
 	for (std::size_t i = limbs_.size(); i-- > 0;) {
 		std::uint64_t cur = limbs_[i] + rem * BASE;
@@ -237,6 +273,18 @@ BigInt& BigInt::operator*=(const BigInt& other)
 	res.sign_ = (sign_ != other.sign_);
 	res.normalize();
 	*this = res;
+	return *this;
+}
+
+BigInt& BigInt::operator/=(const BigInt& other)
+{
+	*this = div(other).first;
+	return *this;
+}
+
+BigInt& BigInt::operator%=(const BigInt& other)
+{
+	*this = div(other).second;
 	return *this;
 }
 
@@ -288,6 +336,53 @@ void BigInt::normalize() noexcept
 	if (limbs_.empty()) {
 		sign_ = false;
 	}
+}
+
+std::pair<BigInt, BigInt> BigInt::div(const BigInt& divisor) const
+{
+	if (divisor.isZero()) {
+		throw std::domain_error("BigInt::div division by zero");
+	}
+
+	if (isZero()) {
+		return { BigInt(0), BigInt(0) };
+	}
+
+	BigInt absDividend(*this);
+	absDividend.sign_ = false;
+	BigInt absDivisor(divisor);
+	absDivisor.sign_ = false;
+
+	if (cmpAbs(absDividend, absDivisor) < 0) {
+		BigInt q(0);
+		BigInt r(*this);
+		r.sign_ = sign_ && !r.isZero();
+		return { std::move(q), std::move(r) };
+	}
+
+	BigInt quotient(0);
+	BigInt remainder(absDividend);
+
+	while (cmpAbs(remainder, absDivisor) >= 0) {
+		BigInt scaledDivisor(absDivisor);
+		BigInt scaledQuotient(1);
+
+		while (true) {
+			BigInt doubledDivisor = scaledDivisor + scaledDivisor;
+			if (cmpAbs(doubledDivisor, remainder) > 0) {
+				break;
+			}
+			scaledDivisor = std::move(doubledDivisor);
+			scaledQuotient = scaledQuotient + scaledQuotient;
+		}
+
+		remainder = subAbs(remainder, scaledDivisor);
+		quotient += scaledQuotient;
+	}
+
+	quotient.sign_ = (sign_ != divisor.sign_) && !quotient.isZero();
+	remainder.sign_ = sign_ && !remainder.isZero();
+	return { std::move(quotient), std::move(remainder) };
 }
 
 std::string BigInt::toString() const

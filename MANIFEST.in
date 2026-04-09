@@ -1,0 +1,8 @@
+include CMakeLists.txt
+include core/CMakeLists.txt
+include bindings/python/CMakeLists.txt
+recursive-include core/include *.hpp *.h
+recursive-include core/src *.cpp
+recursive-include bindings/python *.cpp *.py
+include README.md
+include LICENSE

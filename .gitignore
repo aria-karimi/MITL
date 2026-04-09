@@ -1,8 +1,14 @@
 # Build artifacts
 build/
+build-*/
+build-check/
 CMakeFiles/
 CMakeCache.txt
 cmake_install.cmake
+Makefile
+compile_commands.json
+
+# C/C++ artifacts
 *.obj
 *.o
 *.pdb
@@ -10,11 +16,27 @@ cmake_install.cmake
 *.dll
 *.exe
 
-# VS Code
-.vscode/
+# Packaging artifacts
+dist/
+*.whl
+*.tar.gz
+*.egg-info/
+consumer-check/
 
-# Python
+# Local verification artifacts
+install-verify/
+verify-*.log
+
+# Python cache and envs
 __pycache__/
 *.pyc
 *.pyo
+.venv/
 venv/
+
+# VS Code
+.vscode/
+
+# Local agent/editor artifacts
+.claude/
+.claude/settings.local.json

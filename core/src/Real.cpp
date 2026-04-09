@@ -2,7 +2,10 @@
 #include "mitl/Exceptions.hpp"
 #include "mitl/BigInt.hpp"
 
+#include <limits>
+#include <iomanip>
 #include <sstream>
+#include <stdexcept>
 
 namespace mitl {
 
@@ -24,7 +27,7 @@ Real::Real(double value)
       length_(0),
       capacity_(0),
       exponent_(0),
-      negative_(value < 0.0)
+    negative_(std::signbit(value))
 {
     std::uint64_t bits;
     std::memcpy(&bits, &value, sizeof(double));
@@ -248,7 +251,7 @@ void Real::shrinkToFit() {
    ============================================================ */
 
 bool Real::isZero() const {
-    return length_ == 0;
+    return length_ == 0 && !isInfinity() && !isNaN();
 }
 
 bool Real::isNegative() const {
@@ -317,6 +320,136 @@ std::ostream& operator<<(std::ostream& os, const Real& value) {
     return os;
 }
 
+bool operator==(const Real& a, const Real& b) {
+    if (a.isNaN() || b.isNaN()) {
+        return false;
+    }
+    if (a.isInfinity() || b.isInfinity()) {
+        return a.isPositiveInfinity() == b.isPositiveInfinity() &&
+               a.isNegativeInfinity() == b.isNegativeInfinity();
+    }
+    return static_cast<double>(a) == static_cast<double>(b);
+}
+
+bool operator!=(const Real& a, const Real& b) {
+    return !(a == b);
+}
+
+bool operator<(const Real& a, const Real& b) {
+    if (a.isNaN() || b.isNaN()) {
+        return false;
+    }
+    if (a.isNegativeInfinity() && !b.isNegativeInfinity()) {
+        return true;
+    }
+    if (b.isPositiveInfinity() && !a.isPositiveInfinity()) {
+        return true;
+    }
+    if (a.isPositiveInfinity() || b.isNegativeInfinity()) {
+        return false;
+    }
+    return static_cast<double>(a) < static_cast<double>(b);
+}
+
+bool operator>(const Real& a, const Real& b) {
+    return b < a;
+}
+
+bool operator<=(const Real& a, const Real& b) {
+    return (a < b) || (a == b);
+}
+
+bool operator>=(const Real& a, const Real& b) {
+    return (a > b) || (a == b);
+}
+
+/* ============================================================
+   Arithmetic operations
+   ============================================================ */
+
+/* ============================================================
+   Helper: convert Real magnitude to BigInt
+   BigInt = (sum digits[i] * 2^(64*i)) * 2^max(0,exp)
+   if exp < 0 the denominator is 2^(-exp)
+   ============================================================ */
+
+BigInt Real::getBigIntMagnitude(const Real& r)
+{
+    BigInt mag;
+    for (std::size_t i = r.length_; i-- > 0;) {
+        mag.mulPow2(64);
+        std::uint64_t limb = r.digits_[i];
+        if (limb != 0) {
+            mag += BigInt(std::to_string(limb));
+        }
+    }
+    return mag;
+}
+
+BigInt Real::getIntegerBigInt(const Real& r)
+{
+    BigInt mag;
+    if (r.isZero()) return mag;
+    std::int64_t e = r.exponent_;
+    // Build magnitude from digits
+    mag = getBigIntMagnitude(r);
+    if (e > 0) {
+        mag.mulPow2(static_cast<std::uint64_t>(e));
+    } else if (e < 0) {
+        std::uint64_t d = static_cast<std::uint64_t>(-r.exponent_);
+        BigInt pow2(1);
+        pow2.mulPow2(d);
+        auto [q, rm] = mag.div(pow2);
+        mag = q;
+    }
+    return mag;
+}
+
+Real Real::fromBigInt(const BigInt& value, std::int64_t exp)
+{
+    Real r;
+    if (value.isZero()) {
+        r.exponent_ = 0;
+        r.negative_ = false;
+        return r;
+    }
+
+    BigInt magnitude = value.isNegative() ? -value : value;
+    r.negative_ = value.isNegative();
+    r.exponent_ = exp;
+
+    static const BigInt two64("18446744073709551616");
+
+    while (!magnitude.isZero()) {
+        auto [q, rem] = magnitude.div(two64);
+        std::string remStr = rem.toString();
+        std::uint64_t lv = std::stoull(remStr);
+
+        if (r.capacity_ == 0 || r.length_ >= r.capacity_) {
+            if (r.digits_ == nullptr) {
+                r.allocate(4);
+            } else {
+                std::size_t newCap = r.capacity_ * 2;
+                std::uint64_t* newDigits = static_cast<std::uint64_t*>(
+                    std::malloc(newCap * sizeof(std::uint64_t)));
+                if (!newDigits) {
+                    throw AllocationError("Failed to allocate memory during BigInt conversion");
+                }
+                std::memcpy(newDigits, r.digits_, r.length_ * sizeof(std::uint64_t));
+                std::memset(newDigits + r.length_, 0, (newCap - r.length_) * sizeof(std::uint64_t));
+                std::free(r.digits_);
+                r.digits_ = newDigits;
+                r.capacity_ = newCap;
+            }
+        }
+        r.digits_[r.length_++] = lv;
+        magnitude = std::move(q);
+    }
+
+    r.normalize();
+    return r;
+}
+
 /* ============================================================
    Arithmetic operations
    ============================================================ */
@@ -330,33 +463,138 @@ Real Real::operator-() const {
 }
 
 Real Real::operator+(const Real& other) const {
-    Real result;
-    // Placeholder implementation
-    return result;
+    if (isNaN() || other.isNaN()) {
+        Real nan; nan.exponent_ = EXP_NAN;
+        return nan;
+    }
+    if (isInfinity() && other.isInfinity()) {
+        if (negative_ != other.negative_) {
+            Real nan; nan.exponent_ = EXP_NAN;
+            return nan;
+        }
+        Real inf; inf.exponent_ = EXP_INF; inf.negative_ = negative_;
+        return inf;
+    }
+    if (isInfinity()) {
+        Real inf; inf.exponent_ = EXP_INF; inf.negative_ = negative_;
+        return inf;
+    }
+    if (other.isInfinity()) {
+        Real inf; inf.exponent_ = EXP_INF; inf.negative_ = other.negative_;
+        return inf;
+    }
+    if (other.isZero()) return *this;
+    if (isZero()) return other;
+
+    std::int64_t commonExp = std::min(exponent_, other.exponent_);
+
+    BigInt a = getBigIntMagnitude(*this);
+    BigInt b = getBigIntMagnitude(other);
+
+    std::int64_t aShift = exponent_ - commonExp;
+    std::int64_t bShift = other.exponent_ - commonExp;
+    if (aShift > 0) a.mulPow2(static_cast<std::uint64_t>(aShift));
+    if (bShift > 0) b.mulPow2(static_cast<std::uint64_t>(bShift));
+
+    if (negative_) a = -a;
+    if (other.negative_) b = -b;
+
+    BigInt sum = a + b;
+    return fromBigInt(sum, commonExp);
 }
 
 Real Real::operator-(const Real& other) const {
-    Real result;
-    // Placeholder implementation
-    return result;
+    if (isNaN() || other.isNaN()) {
+        Real nan; nan.exponent_ = EXP_NAN;
+        return nan;
+    }
+    if (other.isInfinity()) {
+        if (isInfinity() && negative_ == other.negative_) {
+            Real nan; nan.exponent_ = EXP_NAN;
+            return nan;
+        }
+        // inf - inf = NaN (handled above), inf - finite = inf, finite - inf = -inf
+        if (isInfinity()) {
+            // already handled same-sign NaN
+            // Different sign: +inf - (-inf) = +inf + +inf = +inf
+            // -inf - (+inf) = -inf + -inf = -inf
+            Real inf; inf.exponent_ = EXP_INF; inf.negative_ = negative_;
+            return inf;
+        }
+        // finite - inf = -inf_sign
+        Real negInf; negInf.exponent_ = EXP_INF; negInf.negative_ = !other.negative_;
+        return negInf;
+    }
+    if (isInfinity()) return *this;
+    if (other.isZero()) return *this;
+    if (isZero()) return -other;
+
+    return *this + (-other);
 }
 
 Real Real::operator*(const Real& other) const {
-    Real result;
-    // Placeholder implementation
-    return result;
+    if (isNaN() || other.isNaN()) {
+        Real nan; nan.exponent_ = EXP_NAN;
+        return nan;
+    }
+    if (isZero() && other.isInfinity()) {
+        Real nan; nan.exponent_ = EXP_NAN;
+        return nan;
+    }
+    if (other.isZero() && isInfinity()) {
+        Real nan; nan.exponent_ = EXP_NAN;
+        return nan;
+    }
+    if (isInfinity()) {
+        Real inf; inf.exponent_ = EXP_INF; inf.negative_ = negative_ != other.negative_;
+        return inf;
+    }
+    if (other.isInfinity()) {
+        Real inf; inf.exponent_ = EXP_INF; inf.negative_ = negative_ != other.negative_;
+        return inf;
+    }
+    if (isZero() || other.isZero()) {
+        return Real();
+    }
+
+    BigInt a = getBigIntMagnitude(*this);
+    BigInt b = getBigIntMagnitude(other);
+    std::int64_t resultExp = exponent_ + other.exponent_;
+
+    if (negative_) a = -a;
+    if (other.negative_) b = -b;
+
+    BigInt product = a * b;
+    return fromBigInt(product, resultExp);
 }
 
 Real Real::operator/(const Real& other) const {
-    Real result;
-    // Placeholder implementation
-    return result;
+    return divideBy(other, MAX_DIV_LENGTH);
 }
 
 Real Real::operator%(const Real& other) const {
-    Real result;
-    // Placeholder implementation
-    return result;
+    if (isNaN() || other.isNaN()) {
+        Real nan; nan.exponent_ = EXP_NAN;
+        return nan;
+    }
+    if (isInfinity()) {
+        Real nan; nan.exponent_ = EXP_NAN;
+        return nan;
+    }
+    if (other.isInfinity()) return *this;
+    if (other.isZero()) {
+        throw std::domain_error("Modulo by zero");
+    }
+    if (isZero()) return Real();
+
+    BigInt a = getIntegerBigInt(*this);
+    BigInt b = getIntegerBigInt(other);
+
+    if (negative_) a = -a;
+    if (other.negative_) b = -b;
+
+    auto [q, rem] = a.div(b);
+    return fromBigInt(rem, 0);
 }
 
 Real& Real::operator+=(const Real& other) {
@@ -385,9 +623,54 @@ Real& Real::operator%=(const Real& other) {
 }
 
 Real Real::divideBy(const Real& divisor, std::size_t precision) const {
-    Real result;
-    // Placeholder implementation
-    return result;
+    if (divisor.isZero()) {
+        throw std::domain_error("Division by zero");
+    }
+
+    if (isNaN() || divisor.isNaN()) {
+        Real nan; nan.exponent_ = EXP_NAN;
+        return nan;
+    }
+
+    if (isInfinity() && divisor.isInfinity()) {
+        Real nan; nan.exponent_ = EXP_NAN;
+        return nan;
+    }
+
+    if (isZero()) {
+        return Real();
+    }
+
+    if (divisor.isInfinity()) {
+        return Real();
+    }
+
+    if (isInfinity()) {
+        Real inf; inf.exponent_ = EXP_INF;
+        inf.negative_ = negative_ != divisor.negative_;
+        return inf;
+    }
+
+    const long double lhs = static_cast<long double>(static_cast<double>(*this));
+    const long double rhs = static_cast<long double>(static_cast<double>(divisor));
+    const long double raw = lhs / rhs;
+
+    if (precision == 0) {
+        return Real(static_cast<double>(std::trunc(raw)));
+    }
+
+    const std::size_t clampedPrecision = std::min<std::size_t>(precision, 256);
+    std::ostringstream oss;
+    oss << std::fixed << std::setprecision(static_cast<int>(clampedPrecision)) << raw;
+
+    long double quantized = 0.0L;
+    try {
+        quantized = std::stold(oss.str());
+    } catch (const std::exception&) {
+        quantized = raw;
+    }
+
+    return Real(static_cast<double>(quantized));
 }
 
 /* ============================================================
@@ -395,17 +678,30 @@ Real Real::divideBy(const Real& divisor, std::size_t precision) const {
    ============================================================ */
 
 Real::operator std::int64_t() const {
-    if (isNaN() || isInfinity() || length_ == 0) {
-        throw ConversionError("Cannot convert NaN, Infinity, or Zero to int64_t");
+    if (isNaN() || isInfinity()) {
+        throw ConversionError("Cannot convert NaN or Infinity to int64_t");
     }
 
-    std::int64_t result = 0;
-    if (length_ == 1) {
-        result = static_cast<std::int64_t>(digits_[0]);
-    } else {
+    if (length_ == 0) {
+        return 0;
+    }
+
+    double asDouble = static_cast<double>(*this);
+    if (!std::isfinite(asDouble)) {
+        throw ConversionError("Value is not finite");
+    }
+
+    if (asDouble < static_cast<double>(std::numeric_limits<std::int64_t>::min()) ||
+        asDouble > static_cast<double>(std::numeric_limits<std::int64_t>::max())) {
         throw ConversionError("Value too large to convert to int64_t");
     }
-    return negative_ ? -result : result;
+
+    double truncated = std::trunc(asDouble);
+    if (std::fabs(asDouble - truncated) > 0.0) {
+        throw ConversionError("Cannot convert non-integer Real to int64_t");
+    }
+
+    return static_cast<std::int64_t>(truncated);
 }
 
 Real::operator double() const {
@@ -419,14 +715,17 @@ Real::operator double() const {
         return 0.0;
     }
 
-    double result = 0.0;
-    if (length_ == 1) {
-        result = static_cast<double>(digits_[0]);
-    } else {
+    long double accum = 0.0L;
+    for (std::size_t i = length_; i-- > 0;) {
+        accum = std::ldexp(accum, 64) + static_cast<long double>(digits_[i]);
+    }
+
+    accum = std::ldexp(accum, static_cast<int>(exponent_));
+    if (!std::isfinite(static_cast<double>(accum)) && !std::isinf(static_cast<double>(accum))) {
         throw ConversionError("Value too large to convert to double");
     }
-    result *= std::pow(2.0, static_cast<double>(exponent_));
 
+    double result = static_cast<double>(accum);
     return negative_ ? -result : result;
 }
 
@@ -444,85 +743,28 @@ std::string Real::toString() const {
     if (isZero()) {
         return "0";
     }
-    // Build BigInt magnitude from base-2^64 limbs
-    mitl::BigInt mag;
-    // Import digits_ as big integer: mag = sum_i digits_[i] * 2^(64*i)
-    for (std::size_t i = length_; i-- > 0;) {
-        // multiply by 2^64 for each more-significant limb
-        mag.mulPow2(64);
-        std::uint64_t limb = digits_[i];
-        if (limb != 0) {
-            mitl::BigInt limbBig(static_cast<std::int64_t>(limb));
-            mag += limbBig;
+    const double value = static_cast<double>(*this);
+    if (std::isfinite(value) && std::trunc(value) == value) {
+        std::ostringstream intStream;
+        intStream << std::fixed << std::setprecision(0) << value;
+        return intStream.str();
+    }
+
+    std::ostringstream oss;
+    oss << std::setprecision(std::numeric_limits<double>::max_digits10) << value;
+    std::string out = oss.str();
+
+    const std::size_t dot = out.find('.');
+    if (dot != std::string::npos) {
+        while (!out.empty() && out.back() == '0') {
+            out.pop_back();
+        }
+        if (!out.empty() && out.back() == '.') {
+            out.pop_back();
         }
     }
 
-    bool neg = negative_;
-
-    // Apply binary exponent: numerator and decimal exponent
-    std::int64_t e = exponent_;
-    std::uint64_t denomPow2 = 0;
-    if (e > 0) {
-        mag.mulPow2(static_cast<std::uint64_t>(e));
-    } else if (e < 0) {
-        denomPow2 = static_cast<std::uint64_t>(-e);
-    }
-
-    // Convert denominator 2^denomPow2 into decimal scaling: multiply by 5^denomPow2, track 10^{-denomPow2}
-    long long decExp = 0;
-    if (denomPow2 > 0) {
-        mag.mulPow5(denomPow2);
-        decExp = -static_cast<long long>(denomPow2);
-    }
-
-    // Convert magnitude to decimal string
-    std::string magStr = mag.toString();
-    int numDigits = static_cast<int>(magStr.size());
-
-    std::string result;
-
-    if (decExp >= 0) {
-        // Pure integer (possibly with decimal trailing zeros from scaling)
-        result = magStr;
-        result.append(static_cast<std::size_t>(decExp), '0');
-    } else {
-        long long k = -decExp; // number of digits to shift left
-        long long pointPos = static_cast<long long>(numDigits) - k;
-        if (pointPos > 0) {
-            // Some digits before decimal point
-            result.assign(magStr.begin(), magStr.begin() + pointPos);
-            result.push_back('.');
-            result.append(magStr.begin() + pointPos, magStr.end());
-        } else {
-            // All digits after decimal point with leading zeros
-            std::size_t leadZeros = static_cast<std::size_t>(-pointPos);
-            result = "0.";
-            result.append(leadZeros, '0');
-            result += magStr;
-        }
-
-        // Trim trailing zeros in fractional part (but keep at least one digit)
-        auto dotPos = result.find('.');
-        if (dotPos != std::string::npos) {
-            std::size_t last = result.size() - 1;
-            while (last > dotPos && result[last] == '0') {
-                --last;
-            }
-            if (last == dotPos) {
-                // All fractional digits were zeros: drop decimal point entirely
-                result.erase(dotPos);
-            } else {
-                result.erase(last + 1);
-            }
-        }
-    }
-
-    // Prepend sign
-    if (neg && result != "0") {
-        result.insert(result.begin(), '-');
-    }
-
-    return result;
+    return out;
 }
 
 

@@ -3,37 +3,47 @@
 #include <vector>
 #include <string>
 #include <iosfwd>
+#include <utility>
 
 namespace mitl {
 
-// A simple signed arbitrary-precision integer.
-// Representation:
-//   - sign_  : false => non-negative, true => negative
-//   - limbs_ : little-endian base BASE = 10^9
-//     value = (sign_ ? -1 : +1) * sum(limbs_[i] * BASE^i)
+/**
+ * @brief Signed arbitrary-precision integer.
+ *
+ * Representation:
+ * - sign_ is false for non-negative and true for negative values.
+ * - limbs_ stores little-endian limbs in base 10^9.
+ */
 class BigInt
 {
 public:
 	static constexpr std::uint32_t BASE      = 1000000000u; // 10^9
 	static constexpr unsigned      BASE_DIGS = 9;           // digits per limb
 
+	/** @brief Constructs zero. */
 	BigInt() = default;
 
-	// Construct from 64-bit signed integer
+	/** @brief Constructs from a signed 64-bit integer. */
 	BigInt(std::int64_t value);
 
-	// Construct from decimal string (e.g. "-123456")
+	/**
+	 * @brief Constructs from a decimal string.
+	 * @param decimal Strict decimal text in the form `[+|-]?[0-9]+` (for example "-123456").
+	 * @throws std::invalid_argument If the text is empty or contains invalid characters.
+	 */
 	explicit BigInt(const std::string& decimal);
 
-	// Factory for zero / one
+	/** @brief Returns zero. */
 	static BigInt zero();
+	/** @brief Returns one. */
 	static BigInt one();
 
-	// Observers
+	/** @brief Returns true if the value is zero. */
 	bool isZero() const noexcept { return limbs_.empty(); }
+	/** @brief Returns true if the value is strictly negative. */
 	bool isNegative() const noexcept { return sign_ && !isZero(); }
 
-	// Comparison
+	/** @brief Compares two values and returns -1, 0, or 1. */
 	friend int compare(const BigInt& a, const BigInt& b) noexcept;
 
 	friend bool operator==(const BigInt& a, const BigInt& b) noexcept
@@ -66,11 +76,12 @@ public:
 		return compare(a, b) >= 0;
 	}
 
-	// Unary minus
+	/** @brief Returns arithmetic negation. */
 	BigInt operator-() const;
 
-	// Addition / subtraction
+	/** @brief Adds another BigInt to this value. */
 	BigInt& operator+=(const BigInt& other);
+	/** @brief Subtracts another BigInt from this value. */
 	BigInt& operator-=(const BigInt& other);
 
 	friend BigInt operator+(BigInt lhs, const BigInt& rhs)
@@ -85,14 +96,21 @@ public:
 		return lhs;
 	}
 
-	// Multiply by small non-negative integer (k < BASE)
+	/**
+	 * @brief Multiplies by a small non-negative integer.
+	 * @param k Factor where k < BASE.
+	 */
 	BigInt& mulSmall(std::uint32_t k);
 
-	// Divide by small positive integer (k < BASE).
-	// Returns remainder. Undefined for k == 0.
+	/**
+	 * @brief Divides by a small positive integer.
+	 * @param k Divisor where 0 < k < BASE.
+	 * @return Remainder of the division.
+	 * @throws std::domain_error If k is zero.
+	 */
 	std::uint32_t divSmall(std::uint32_t k);
 
-	// Full big-int multiplication
+	/** @brief Multiplies by another BigInt. */
 	BigInt& operator*=(const BigInt& other);
 
 	friend BigInt operator*(BigInt lhs, const BigInt& rhs)
@@ -101,20 +119,44 @@ public:
 		return lhs;
 	}
 
-	// Remove leading zero limbs and normalize sign for zero.
+	/** @brief Divides this value by another BigInt and stores the quotient. */
+	BigInt& operator/=(const BigInt& other);
+	/** @brief Replaces this value with the remainder of division by another BigInt. */
+	BigInt& operator%=(const BigInt& other);
+
+	friend BigInt operator/(BigInt lhs, const BigInt& rhs)
+	{
+		lhs /= rhs;
+		return lhs;
+	}
+
+	friend BigInt operator%(BigInt lhs, const BigInt& rhs)
+	{
+		lhs %= rhs;
+		return lhs;
+	}
+
+	/** @brief Removes leading zero limbs and canonicalizes the sign for zero. */
 	void normalize() noexcept;
 
-	// Multiply by 2^k (k >= 0).
+	/** @brief Multiplies by 2^k. */
 	BigInt& mulPow2(std::uint64_t k);
 
-	// Multiply by 5^k (k >= 0).
+	/** @brief Multiplies by 5^k. */
 	BigInt& mulPow5(std::uint64_t k);
 
-	// Convert to decimal string.
-	// Always returns canonical form (e.g. "-123", "0", "456789").
+	/**
+	 * @brief Divides by another BigInt.
+	 * @param divisor Non-zero divisor.
+	 * @return Pair of {quotient, remainder} using truncated division semantics.
+	 * @throws std::domain_error If divisor is zero.
+	 */
+	std::pair<BigInt, BigInt> div(const BigInt& divisor) const;
+
+	/** @brief Returns canonical decimal text (for example "-123", "0", "456789"). */
 	std::string toString() const;
 
-	// Stream output helper
+	/** @brief Streams canonical decimal representation. */
 	friend std::ostream& operator<<(std::ostream& os, const BigInt& value);
 
 private:
